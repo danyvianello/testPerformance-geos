@@ -1,0 +1,26 @@
+{
+  "name": "performanceoutputtyp",
+  "version": "1.0.0",
+  "description": "Performance tests tipo Lighthouse por geolocalización (Argentina, España, México, Perú, Colombia, Estados Unidos)",
+  "type": "module",
+  "scripts": {
+    "test:perf": "node src/run-all-geos.js",
+    "test:perf:fast": "cross-env GEO=ARGENTINA PERF_ITERATIONS=1 PERF_FORM_FACTOR=mobile node src/run-tests.js",
+    "test:perf:argentina": "cross-env GEO=ARGENTINA node src/run-tests.js",
+    "test:perf:espana": "cross-env GEO=ESPANA node src/run-tests.js",
+    "test:perf:mexico": "cross-env GEO=MEXICO node src/run-tests.js",
+    "test:perf:peru": "cross-env GEO=PERU node src/run-tests.js",
+    "test:perf:colombia": "cross-env GEO=COLOMBIA node src/run-tests.js",
+    "test:perf:estados_unidos": "cross-env GEO=ESTADOS_UNIDOS node src/run-tests.js"
+  },
+  "keywords": ["lighthouse", "performance", "infobae"],
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "lighthouse": "^11.4.0",
+    "chrome-launcher": "^0.15.2"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  }
+}
