@@ -24,16 +24,18 @@ function cell(avg, letter) {
   return `${avg != null ? avg : '—'} (${letter})`;
 }
 
+const ARROW_STYLE = 'font-size: 25px;';
+
 /** Flecha según si mejoró (con bundle > sin bundle) o empeoró. Devuelve HTML o texto para MD. */
 function trendArrow(sinAvg, conAvg, format = 'html') {
-  if (sinAvg == null || conAvg == null) return format === 'html' ? '<span>—</span>' : '—';
+  if (sinAvg == null || conAvg == null) return format === 'html' ? `<span style="${ARROW_STYLE}">—</span>` : '—';
   const improved = conAvg > sinAvg;
   const same = conAvg === sinAvg;
   if (format === 'html') {
-    if (same) return '<span style="color:#666">−</span>';
+    if (same) return `<span style="color:#666; ${ARROW_STYLE}">−</span>`;
     return improved
-      ? '<span style="color:#0a0" title="Mejoró con bundle">↑</span>'
-      : '<span style="color:#c00" title="Empeoró con bundle">↓</span>';
+      ? `<span style="color:#0a0; ${ARROW_STYLE}" title="Mejoró con bundle">↑</span>`
+      : `<span style="color:#c00; ${ARROW_STYLE}" title="Empeoró con bundle">↓</span>`;
   }
   if (same) return '−';
   return improved ? '↑' : '↓';

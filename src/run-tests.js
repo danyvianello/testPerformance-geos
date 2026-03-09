@@ -99,6 +99,7 @@ async function main() {
   const urls = getAllUrls();
   const chrome = await chromeLauncher.launch({ chromeFlags: ['--headless', '--no-sandbox', '--disable-dev-shm-usage'] });
 
+  const startTime = Date.now();
   const report = {
     geo: GEO,
     bundleVersion: BUNDLE_VERSION || '(sin variable)',
@@ -119,8 +120,21 @@ async function main() {
       console.log(`  Con bundle - Mobile: ${c.mobile.average} (${c.mobile.letter}) | Desktop: ${c.desktop.average} (${c.desktop.letter})`);
     }
   } finally {
-    await chrome.kill();
+    try {
+      await chrome.kill();
+    } catch (err) {
+      console.warn('\n[aviso] No se pudo cerrar Chrome limpiamente (puede ocurrir en Windows):', err.message);
+    }
   }
+
+  const elapsedMs = Date.now() - startTime;
+  const elapsedMin = Math.floor(elapsedMs / 60000);
+  const elapsedSec = Math.round((elapsedMs % 60000) / 1000);
+  const totalTimeStr = elapsedMin > 0 ? `${elapsedMin} min ${elapsedSec} s` : `${elapsedSec} s`;
+  const avgPerUrlMs = urls.length ? elapsedMs / urls.length : 0;
+  const avgPerUrlSec = Math.round(avgPerUrlMs / 1000);
+
+  console.log(`\n[Tiempo] Total: ${totalTimeStr} | Promedio por URL: ~${avgPerUrlSec} s (${urls.length} URLs)`);
 
   const reportPath = path.join(REPORTS_DIR, `report-${GEO.toLowerCase()}-${Date.now()}.json`);
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
