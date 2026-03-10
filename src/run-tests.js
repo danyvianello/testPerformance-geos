@@ -25,7 +25,7 @@ const BUNDLE_VERSION = process.env.BUNDLE_VERSION || '';
 const GEO = (process.env.GEO || 'ARGENTINA').toUpperCase();
 const ITERATIONS = Math.max(1, Math.min(5, parseInt(process.env.PERF_ITERATIONS, 10) || 3));
 const FORM_FACTOR = (process.env.PERF_FORM_FACTOR || 'all').toLowerCase();
-const CONCURRENCY = Math.max(1, Math.min(8, parseInt(process.env.PERF_CONCURRENCY, 10) || 1));
+const CONCURRENCY = Math.max(1, Math.min(12, parseInt(process.env.PERF_CONCURRENCY, 10) || 1));
 
 const runMobile = FORM_FACTOR === 'all' || FORM_FACTOR === 'mobile';
 const runDesktop = FORM_FACTOR === 'all' || FORM_FACTOR === 'desktop';
