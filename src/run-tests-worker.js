@@ -49,6 +49,7 @@ parentPort.on('message', async (msg) => {
         },
       });
       entries.push(entry);
+      parentPort.postMessage({ type: 'entry', entry });
     }
   } finally {
     try {
@@ -56,5 +57,5 @@ parentPort.on('message', async (msg) => {
     } catch (_) {}
   }
 
-  parentPort.postMessage({ type: 'done', entries });
+  parentPort.postMessage({ type: 'done' });
 });

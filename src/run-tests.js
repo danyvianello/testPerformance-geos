@@ -77,7 +77,7 @@ async function runSerie(urls, report, startTime) {
 }
 
 /** Ejecuta en paralelo con Worker Threads: N workers, cada uno con su Chrome y su chunk de URLs. */
-async function runWithWorkers(urls, report, startTime) {
+async function runWithWorkers(urls, report, startTime, sharedState) {
   const chunkSize = Math.ceil(urls.length / CONCURRENCY);
   const workerUrl = new URL('./run-tests-worker.js', import.meta.url);
   const workerConfig = {
@@ -87,25 +87,29 @@ async function runWithWorkers(urls, report, startTime) {
     formFactor: FORM_FACTOR,
   };
 
-  const results = await Promise.all(
+  await Promise.all(
     Array.from({ length: CONCURRENCY }, (_, workerId) => {
       const start = workerId * chunkSize;
       const chunk = urls.slice(start, start + chunkSize);
-      if (chunk.length === 0) return Promise.resolve([]);
+      if (chunk.length === 0) return Promise.resolve();
 
       return new Promise((resolve, reject) => {
         const worker = new Worker(workerUrl, {
           type: 'module',
           env: process.env,
         });
-        const entries = [];
+        if (sharedState) sharedState.workers.push(worker);
+
         worker.on('message', (msg) => {
           if (msg.type === 'progress') {
             console.log(`\n[${GEO}] Procesando (${msg.urlIndex}/${msg.totalUrls}): ${msg.url}`);
           } else if (msg.type === 'retry') {
             console.warn(`  [reintento ${msg.retryNum}/${RETRY_MAX}] ${msg.url?.slice(0, 50)}… (${msg.message}) — esperando ${msg.retryNum * 2}s`);
+          } else if (msg.type === 'entry') {
+            report.summary.push(msg.entry);
+            logEntryResult(msg.entry);
           } else if (msg.type === 'done') {
-            entries.push(...msg.entries);
+            resolve();
           } else if (msg.type === 'error') {
             const e = new Error(msg.error);
             if (msg.stack) e.stack = msg.stack;
@@ -114,8 +118,8 @@ async function runWithWorkers(urls, report, startTime) {
         });
         worker.on('error', reject);
         worker.on('exit', (code) => {
-          if (code !== 0) reject(new Error(`Worker salió con código ${code}`));
-          else resolve(entries);
+          if (code !== 0 && !sharedState?.interrupted) reject(new Error(`Worker salió con código ${code}`));
+          else resolve();
         });
         worker.postMessage({
           urls: chunk,
@@ -127,13 +131,28 @@ async function runWithWorkers(urls, report, startTime) {
     })
   );
 
-  // Fusionar en orden: chunk 0, chunk 1, ...
-  for (const entries of results) {
-    for (const entry of entries) {
-      report.summary.push(entry);
-      logEntryResult(entry);
-    }
+  // Ordenar por el orden original de las URLs
+  const urlOrder = new Map(urls.map((u, i) => [u, i]));
+  report.summary.sort((a, b) => (urlOrder.get(a.url) ?? 0) - (urlOrder.get(b.url) ?? 0));
+}
+
+function printPartialSummaryAndExit(report, urls, startTime) {
+  const n = report.summary.length;
+  const total = urls.length;
+  console.log(`\n--- Interrumpido (Ctrl+C). URLs completadas: ${n}/${total} ---`);
+  if (n > 0) {
+    console.log('\nResultados hasta el momento:');
+    for (const entry of report.summary) logEntryResult(entry);
+    const elapsedMs = Date.now() - startTime;
+    report.durationMs = elapsedMs;
+    const reportPath = path.join(REPORTS_DIR, `report-${GEO.toLowerCase()}-partial-${Date.now()}.json`);
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
+    const { mdPath, htmlPath } = writeReportFiles(report, reportPath);
+    console.log(`\nReporte parcial guardado: ${reportPath}`);
   }
+  const elapsedMs = Date.now() - startTime;
+  console.log(`\nTiempo hasta interrupción: ${Math.round(elapsedMs / 1000)} s`);
+  process.exit(130);
 }
 
 async function main() {
@@ -152,12 +171,33 @@ async function main() {
   };
 
   const useWorkers = CONCURRENCY > 1;
+  const sharedState = useWorkers ? { workers: [], interrupted: false } : null;
+
+  if (useWorkers && sharedState) {
+    process.on('SIGINT', () => {
+      if (sharedState.interrupted) return;
+      sharedState.interrupted = true;
+      console.log('\n\nDeteniendo workers (Ctrl+C)...');
+      for (const w of sharedState.workers) {
+        try { w.terminate(); } catch (_) {}
+      }
+      printPartialSummaryAndExit(report, urls, startTime);
+    });
+  }
+
   console.log(`\n[${GEO}] Iniciando tests: ${urls.length} URLs${useWorkers ? ` (paralelo: ${CONCURRENCY} workers)` : ' (serie)'}`);
 
-  if (useWorkers) {
-    await runWithWorkers(urls, report, startTime);
-  } else {
-    await runSerie(urls, report, startTime);
+  try {
+    if (useWorkers) {
+      await runWithWorkers(urls, report, startTime, sharedState);
+    } else {
+      await runSerie(urls, report, startTime);
+    }
+  } catch (err) {
+    if (sharedState?.interrupted) {
+      printPartialSummaryAndExit(report, urls, startTime);
+    }
+    throw err;
   }
 
   const elapsedMs = Date.now() - startTime;
@@ -169,6 +209,7 @@ async function main() {
 
   console.log(`\n[Tiempo] Total: ${totalTimeStr} | Promedio por URL: ~${avgPerUrlSec} s (${urls.length} URLs)`);
 
+  report.durationMs = elapsedMs;
   const reportPath = path.join(REPORTS_DIR, `report-${GEO.toLowerCase()}-${Date.now()}.json`);
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
   const { mdPath, htmlPath } = writeReportFiles(report, reportPath);
