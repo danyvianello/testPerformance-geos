@@ -8,10 +8,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { writeFinalReport } from './report-builder.js';
+import { GEOS } from './urls.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPORTS_DIR = path.join(__dirname, '..', 'reports');
-const GEOS = ['ARGENTINA', 'ESPANA', 'MEXICO', 'PERU', 'COLOMBIA', 'ESTADOS_UNIDOS'];
 
 function runGeo(geo) {
   return new Promise((resolve, reject) => {

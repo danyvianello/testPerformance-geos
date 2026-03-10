@@ -4,16 +4,19 @@
  * - 3 iteraciones por URL en mobile, 3 en desktop (con bundle).
  * - Promedio y letra de performance por cada combinación.
  * - Un reporte por geolocalización (ARGENTINA, ESPANA, MEXICO).
+ *
+ * Con PERF_CONCURRENCY > 1 usa Worker Threads (un Chrome por hilo) para evitar
+ * errores de "performance mark" y reducir tiempo total.
  */
 
 import 'dotenv/config';
-import lighthouse from 'lighthouse';
-import * as chromeLauncher from 'chrome-launcher';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getAllUrls, addBundleParam } from './urls.js';
+import { Worker } from 'worker_threads';
+import { getAllUrls } from './urls.js';
 import { writeReportFiles } from './report-builder.js';
+import { launchChrome, runUrlSummary, formatChromeErrorMessage } from './lighthouse-runner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPORTS_DIR = path.join(__dirname, '..', 'reports');
@@ -22,84 +25,123 @@ const BUNDLE_VERSION = process.env.BUNDLE_VERSION || '';
 const GEO = (process.env.GEO || 'ARGENTINA').toUpperCase();
 const ITERATIONS = Math.max(1, Math.min(5, parseInt(process.env.PERF_ITERATIONS, 10) || 3));
 const FORM_FACTOR = (process.env.PERF_FORM_FACTOR || 'all').toLowerCase();
-
-/** Convierte score 0-100 a letra (estilo Lighthouse) */
-function scoreToLetter(score) {
-  if (score >= 90) return 'A';
-  if (score >= 50) return score >= 80 ? 'B' : score >= 70 ? 'C' : 'D';
-  return 'F';
-}
-
-/** Ejecuta Lighthouse una vez y devuelve performance score 0-100 */
-async function runLighthouseOnce(url, formFactor, chrome) {
-  const options = {
-    port: chrome.port,
-    formFactor,
-    screenEmulation: formFactor === 'mobile'
-      ? { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false }
-      : { mobile: false, width: 1350, height: 940, deviceScaleFactor: 1, disabled: false },
-    throttling: formFactor === 'mobile'
-      ? { rttMs: 150, throughputKbps: 1.6 * 1024, cpuSlowdownMultiplier: 4 }
-      : { rttMs: 40, throughputKbps: 10 * 1024, cpuSlowdownMultiplier: 1 },
-    output: 'json',
-    logLevel: 'silent',
-  };
-  const config = {
-    extends: 'lighthouse:default',
-    settings: { onlyCategories: ['performance'] },
-  };
-  const runnerResult = await lighthouse(url, options, config);
-  const score = runnerResult?.lhr?.categories?.performance?.score;
-  return score != null ? Math.round(score * 100) : null;
-}
-
-/** Ejecuta N veces (PERF_ITERATIONS) y devuelve { values, average, letter } */
-async function runNTimes(url, formFactor, chrome) {
-  const values = [];
-  for (let i = 0; i < ITERATIONS; i++) {
-    const score = await runLighthouseOnce(url, formFactor, chrome);
-    if (score != null) values.push(score);
-  }
-  const average = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
-  return {
-    values,
-    average: average != null ? Math.round(average * 10) / 10 : null,
-    letter: average != null ? scoreToLetter(average) : '-',
-  };
-}
+const CONCURRENCY = Math.max(1, Math.min(8, parseInt(process.env.PERF_CONCURRENCY, 10) || 1));
 
 const runMobile = FORM_FACTOR === 'all' || FORM_FACTOR === 'mobile';
 const runDesktop = FORM_FACTOR === 'all' || FORM_FACTOR === 'desktop';
 
-/** Para una URL: N runs sin bundle (mobile y/o desktop) y N con bundle */
-async function runUrlSummary(url, chrome) {
-  const urlSinBundle = url;
-  const urlConBundle = addBundleParam(url, BUNDLE_VERSION);
+const RETRY_MAX = 3;
 
-  const sinBundle = {
-    mobile: runMobile ? await runNTimes(urlSinBundle, 'mobile', chrome) : { values: [], average: null, letter: '-' },
-    desktop: runDesktop ? await runNTimes(urlSinBundle, 'desktop', chrome) : { values: [], average: null, letter: '-' },
-  };
-  const conBundle = {
-    mobile: runMobile ? await runNTimes(urlConBundle, 'mobile', chrome) : { values: [], average: null, letter: '-' },
-    desktop: runDesktop ? await runNTimes(urlConBundle, 'desktop', chrome) : { values: [], average: null, letter: '-' },
+/** Log por consola del resultado de una URL (sin/con bundle mobile/desktop). */
+function logEntryResult(entry) {
+  const s = entry.sinBundle;
+  const c = entry.conBundle;
+  console.log(`\n[${GEO}] URL: ${entry.url}`);
+  console.log(`  Sin bundle - Mobile: ${s.mobile.average} (${s.mobile.letter}) | Desktop: ${s.desktop.average} (${s.desktop.letter})`);
+  console.log(`  Con bundle - Mobile: ${c.mobile.average} (${c.mobile.letter}) | Desktop: ${c.desktop.average} (${c.desktop.letter})`);
+}
+
+/** Ejecuta en serie (CONCURRENCY=1): un Chrome, todas las URLs. */
+async function runSerie(urls, report, startTime) {
+  const chrome = await launchChrome();
+  try {
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      const urlIndex = i + 1;
+      const entry = await runUrlSummary(url, chrome, {
+        bundleVersion: BUNDLE_VERSION,
+        iterations: ITERATIONS,
+        formFactor: FORM_FACTOR,
+        runMobile,
+        runDesktop,
+        urlIndex,
+        totalUrls: urls.length,
+        onProgress(idx, total, u) {
+          console.log(`\n[${GEO}] Procesando (${idx}/${total}): ${u}`);
+        },
+        onRetry(retryNum, u, err) {
+          const delaySec = retryNum * 2;
+          console.warn(`  [reintento ${retryNum}/${RETRY_MAX}] ${u.slice(0, 50)}… (${err?.message?.slice(0, 55) || err?.code}) — esperando ${delaySec}s`);
+        },
+      });
+      report.summary.push(entry);
+      logEntryResult(entry);
+    }
+  } finally {
+    try {
+      await chrome.kill();
+    } catch (err) {
+      console.warn('\n[aviso] No se pudo cerrar Chrome:', err.message);
+    }
+  }
+}
+
+/** Ejecuta en paralelo con Worker Threads: N workers, cada uno con su Chrome y su chunk de URLs. */
+async function runWithWorkers(urls, report, startTime) {
+  const chunkSize = Math.ceil(urls.length / CONCURRENCY);
+  const workerUrl = new URL('./run-tests-worker.js', import.meta.url);
+  const workerConfig = {
+    geo: GEO,
+    bundleVersion: BUNDLE_VERSION,
+    iterations: ITERATIONS,
+    formFactor: FORM_FACTOR,
   };
 
-  return {
-    url,
-    urlConBundle: BUNDLE_VERSION ? urlConBundle : null,
-    sinBundle,
-    conBundle,
-  };
+  const results = await Promise.all(
+    Array.from({ length: CONCURRENCY }, (_, workerId) => {
+      const start = workerId * chunkSize;
+      const chunk = urls.slice(start, start + chunkSize);
+      if (chunk.length === 0) return Promise.resolve([]);
+
+      return new Promise((resolve, reject) => {
+        const worker = new Worker(workerUrl, {
+          type: 'module',
+          env: process.env,
+        });
+        const entries = [];
+        worker.on('message', (msg) => {
+          if (msg.type === 'progress') {
+            console.log(`\n[${GEO}] Procesando (${msg.urlIndex}/${msg.totalUrls}): ${msg.url}`);
+          } else if (msg.type === 'retry') {
+            console.warn(`  [reintento ${msg.retryNum}/${RETRY_MAX}] ${msg.url?.slice(0, 50)}… (${msg.message}) — esperando ${msg.retryNum * 2}s`);
+          } else if (msg.type === 'done') {
+            entries.push(...msg.entries);
+          } else if (msg.type === 'error') {
+            const e = new Error(msg.error);
+            if (msg.stack) e.stack = msg.stack;
+            reject(e);
+          }
+        });
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) reject(new Error(`Worker salió con código ${code}`));
+          else resolve(entries);
+        });
+        worker.postMessage({
+          urls: chunk,
+          startIndex: start + 1,
+          totalUrls: urls.length,
+          ...workerConfig,
+        });
+      });
+    })
+  );
+
+  // Fusionar en orden: chunk 0, chunk 1, ...
+  for (const entries of results) {
+    for (const entry of entries) {
+      report.summary.push(entry);
+      logEntryResult(entry);
+    }
+  }
 }
 
 async function main() {
   if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR, { recursive: true });
 
   const urls = getAllUrls();
-  const chrome = await chromeLauncher.launch({ chromeFlags: ['--headless', '--no-sandbox', '--disable-dev-shm-usage'] });
-
   const startTime = Date.now();
+
   const report = {
     geo: GEO,
     bundleVersion: BUNDLE_VERSION || '(sin variable)',
@@ -109,22 +151,13 @@ async function main() {
     summary: [],
   };
 
-  try {
-    for (const url of urls) {
-      console.log(`\n[${GEO}] URL: ${url}`);
-      const entry = await runUrlSummary(url, chrome);
-      report.summary.push(entry);
-      const s = entry.sinBundle;
-      const c = entry.conBundle;
-      console.log(`  Sin bundle - Mobile: ${s.mobile.average} (${s.mobile.letter}) | Desktop: ${s.desktop.average} (${s.desktop.letter})`);
-      console.log(`  Con bundle - Mobile: ${c.mobile.average} (${c.mobile.letter}) | Desktop: ${c.desktop.average} (${c.desktop.letter})`);
-    }
-  } finally {
-    try {
-      await chrome.kill();
-    } catch (err) {
-      console.warn('\n[aviso] No se pudo cerrar Chrome limpiamente (puede ocurrir en Windows):', err.message);
-    }
+  const useWorkers = CONCURRENCY > 1;
+  console.log(`\n[${GEO}] Iniciando tests: ${urls.length} URLs${useWorkers ? ` (paralelo: ${CONCURRENCY} workers)` : ' (serie)'}`);
+
+  if (useWorkers) {
+    await runWithWorkers(urls, report, startTime);
+  } else {
+    await runSerie(urls, report, startTime);
   }
 
   const elapsedMs = Date.now() - startTime;
@@ -146,6 +179,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error(formatChromeErrorMessage(err));
+  if (err?.stack) console.error(err.stack);
   process.exit(1);
 });

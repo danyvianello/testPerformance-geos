@@ -17,6 +17,7 @@ Copia `.env.example` a `.env` y configura:
 | `GEO`            | **Dejarla vacía.** `test:perf` corre las 6 geos. Para una sola: `test:perf:argentina`, `test:perf:espana`, `test:perf:mexico`, `test:perf:peru`, `test:perf:colombia` o `test:perf:estados_unidos`. |
 | `PERF_ITERATIONS` | Iteraciones por dispositivo (1–5). Default: 3. Con `1` el test va mucho más rápido pero el promedio es una sola medición. |
 | `PERF_FORM_FACTOR` | `all` \| `mobile` \| `desktop`. Default: `all`. Con `mobile` o `desktop` solo se mide ese dispositivo (~2× más rápido). |
+| `PERF_CONCURRENCY` | Número de URLs en paralelo (1–8). Default: 1. Con `2` ~40–50% más rápido; con 4–6 en máquinas con 16+ GB RAM. |
 
 **URL base:** `https://www.infobae.com/`. Todas las URLs de prueba usan este dominio; las que llevan bundle añaden `?d=<BUNDLE_VERSION>`.
 
@@ -62,9 +63,43 @@ Sin tocar workers (se mantiene 1 para no afectar resultados), podés acelerar as
 
 | Opción | Variable | Efecto |
 |--------|----------|--------|
+| URLs en paralelo | `PERF_CONCURRENCY=2` (o `3`) | 2–3 Chromes procesando URLs a la vez; tiempo total suele bajar ~40–50% (con 2). |
 | Menos iteraciones | `PERF_ITERATIONS=1` (o `2`) | ~3× más rápido con 1 iteración; el “promedio” es una sola corrida (más variación). |
 | Solo mobile o solo desktop | `PERF_FORM_FACTOR=mobile` o `PERF_FORM_FACTOR=desktop` | ~2× más rápido; se mide solo ese dispositivo. |
-| Una sola geo | `npm run test:perf:argentina` (en vez de `test:perf`) | ~3× más rápido; un solo reporte. |
+| Una sola geo | `npm run test:perf:argentina` (en vez de `test:perf`) | Menos tiempo; un solo reporte. |
+
+### Paralelizar
+
+Con `PERF_CONCURRENCY` se lanzan varias instancias de Chrome y se procesan varias URLs a la vez. El tiempo total baja de forma notable (con 4–6, en torno a la mitad o menos del tiempo de una sola).
+
+**RAM aproximada por nivel:**
+
+| PERF_CONCURRENCY | Chromes | RAM estimada | Uso recomendado |
+|------------------|---------|--------------|------------------|
+| 4 | 4 | ~1,5–2,5 GB | **Recomendado en Windows** (más estable) |
+| 6 | 6 | ~2,5–4 GB | Cómodo, más rápido |
+| 8 | 8 | ~3–5 GB | Puede dar errores de Lighthouse en Windows (marks en paralelo) |
+
+**Nota:** Con 8 instancias en paralelo, Lighthouse a veces lanza errores internos (`performance mark has not been set`) porque las marcas de tiempo son globales en el proceso. En Windows conviene usar **4 o 6**. Los avisos *"No se pudo cerrar Chrome limpiamente"* (EPERM) son normales y no afectan el reporte.
+
+Podés combinar paralelismo y número de bundle en la misma línea:
+
+**PowerShell (Windows):**
+```powershell
+$env:PERF_CONCURRENCY=6; $env:BUNDLE_VERSION=3844; npm run test:perf:espana
+```
+
+**CMD (Windows):**
+```cmd
+set PERF_CONCURRENCY=6 && set BUNDLE_VERSION=3844 && npm run test:perf:espana
+```
+
+**Bash / Git Bash / Linux / Mac:**
+```bash
+PERF_CONCURRENCY=6 BUNDLE_VERSION=3844 npm run test:perf:espana
+```
+
+Recomendación en Windows: usar `PERF_CONCURRENCY=4` o `6` en lugar de 8 para evitar fallos de Lighthouse. También podés fijar ambas variables en `.env` y ejecutar solo `npm run test:perf:argentina` (o la geo que quieras).
 
 Atajo para prueba rápida (1 geo, 1 iteración, solo mobile):
 

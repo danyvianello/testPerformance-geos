@@ -6,6 +6,15 @@
 import fs from 'fs';
 import path from 'path';
 
+/** Formato de fecha y horario para reportes (es-AR). */
+function formatReportMeta(timestamp) {
+  const ts = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  return {
+    date: ts.toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'short' }),
+    horario: ts.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
+  };
+}
+
 /**
  * Acorta la URL para mostrar en tablas (solo path después del dominio).
  */
@@ -46,8 +55,7 @@ function trendArrow(sinAvg, conAvg, format = 'html') {
  */
 export function buildMarkdown(report) {
   const { geo, bundleVersion, timestamp, iterationsPerDevice, formFactor, summary } = report;
-  const date = new Date(timestamp).toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'short' });
-  const horario = new Date(timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  const { date, horario } = formatReportMeta(timestamp);
 
   let md = '';
   md += `# Reporte de performance – ${geo}\n\n`;
@@ -94,8 +102,7 @@ export function buildMarkdown(report) {
  */
 export function buildHtml(report) {
   const { geo, bundleVersion, timestamp, iterationsPerDevice, formFactor, summary } = report;
-  const date = new Date(timestamp).toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'short' });
-  const horario = new Date(timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  const { date, horario } = formatReportMeta(timestamp);
 
   const rows = summary.map((entry) => {
     const s = entry.sinBundle;
@@ -210,9 +217,7 @@ export function writeReportFiles(report, reportPathJson) {
  * reports: array de report objects [{ geo, ... }, ...]
  */
 export function buildFinalReport(reports) {
-  const now = new Date();
-  const date = now.toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'short' });
-  const horario = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  const { date, horario } = formatReportMeta(new Date());
 
   let md = `# Reporte final de performance – Todas las geolocalizaciones\n\n`;
   md += `**Fecha:** ${date}\n\n`;
